@@ -1,0 +1,140 @@
+name: 编译 LEDE x86_64
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lede-build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    env:
+      TZ: Asia/Shanghai
+      CCACHE_MAXSIZE: 3G
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: 获取编译配置
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: 清理磁盘并安装依赖
+        timeout-minutes: 25
+        run: |
+          # 只清理 GitHub 临时运行器中与 LEDE 编译无关的预装组件。
+          df -h
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
+            bzip2 ccache clang cmake cpio curl device-tree-compiler flex gawk \
+            gcc-multilib g++-multilib gettext genisoimage git gperf help2man intltool \
+            libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev \
+            libmpc-dev libmpfr-dev libncurses-dev libpython3-dev libreadline-dev \
+            libssl-dev libtool llvm libnsl-dev ninja-build p7zip-full patch pkgconf \
+            python3 python3-pyelftools python3-setuptools qemu-utils rsync scons \
+            squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip wget \
+            xmlto xxd xz-utils zlib1g-dev
+          sudo apt-get clean
+          df -h
+          free -h
+
+      - name: 获取固定版本的源码及 feeds
+        timeout-minutes: 30
+        run: |
+          revision=$(tr -d '\r\n' < source.version)
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          git init openwrt
+          git -C openwrt remote add origin https://github.com/coolsnowwolf/lede.git
+          git -C openwrt fetch --depth 1 origin "$revision"
+          git -C openwrt checkout --detach FETCH_HEAD
+          cp feeds.lock openwrt/feeds.conf.default
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: 解析并核对编译配置
+        id: configure
+        run: |
+          mkdir -p artifacts/buildinfo artifacts/logs
+          python3 scripts/test-check-config.py
+          cp .config openwrt/.config
+          make -C openwrt defconfig 2>&1 | tee artifacts/logs/defconfig.log
+          cp openwrt/.config artifacts/buildinfo/resolved.config
+          python3 scripts/check-config.py .config openwrt/.config
+          cp source.version feeds.lock artifacts/buildinfo/
+          cd openwrt
+          ./scripts/diffconfig.sh > ../artifacts/buildinfo/diffconfig
+          ./scripts/feeds list -s > ../artifacts/buildinfo/feeds.buildinfo
+
+      - name: 恢复下载和编译缓存
+        id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            openwrt/dl
+            openwrt/.ccache
+          key: lede-x86-22-v1-${{ hashFiles('source.version', 'feeds.lock', '.config') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            lede-x86-22-v1-${{ hashFiles('source.version', 'feeds.lock', '.config') }}-
+
+      - name: 下载源码包
+        timeout-minutes: 20
+        run: |
+          # 通过 make 参数启用主机编译缓存，不修改用户的固件配置。
+          make -C openwrt download -j8 CONFIG_CCACHE=y 2>&1 | tee artifacts/logs/download.log
+
+      - name: 编译固件
+        id: compile
+        timeout-minutes: 300
+        run: |
+          df -h
+          # 多线程失败后单线程输出详细错误，两次尝试共用此步骤的超时限额。
+          if ! make -C openwrt -j"$(nproc)" CONFIG_CCACHE=y 2>&1 | tee artifacts/logs/build.log; then
+            make -C openwrt -j1 V=s CONFIG_CCACHE=y 2>&1 | tee artifacts/logs/build-retry.log
+          fi
+
+      - name: 上传固件及目标软件包
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: LEDE-x86_64-${{ github.run_number }}
+          path: openwrt/bin/targets/x86/64/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: 保存缓存供下次使用
+        if: ${{ !cancelled() && steps.configure.outcome == 'success' && steps.cache.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 10
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            openwrt/dl
+            openwrt/.ccache
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+
+      - name: 整理诊断日志
+        if: always()
+        run: |
+          mkdir -p artifacts/logs
+          df -h > artifacts/logs/disk.txt
+          free -h > artifacts/logs/memory.txt
+          find artifacts/logs -type f -name '*.log' -exec gzip -f {} +
+
+      - name: 上传日志和实际编译配置
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: LEDE-buildinfo-${{ github.run_number }}
+          path: artifacts/
+          retention-days: 14
+          if-no-files-found: warn
