@@ -1,8 +1,0 @@
-src-git passwall_packages https://github.com/Openwrt-Passwall/openwrt-passwall-packages.git^4dad9be70a37343ad3ef88cd3722576e8e234edf
-src-git passwall_luci https://github.com/Openwrt-Passwall/openwrt-passwall.git^444d379c2d2aa2aed7442ffc9a1b9efac28a865b
-src-git packages https://github.com/coolsnowwolf/packages.git^a25f30bbfcdd3cc130dc7dc5c35b9ed54e0155e8
-src-git luci https://github.com/coolsnowwolf/luci.git^8f7eed5d3b4eaadbde4c6f25371cbb9015850f6f
-src-git routing https://github.com/coolsnowwolf/routing.git^2d0f967bd6bd95d4c0d3c330e4713e79d75b4c54
-src-git telephony https://github.com/coolsnowwolf/telephony.git^d3bcb153813b1ff34b3dd0f1bf0dc913984f2921
-src-git helloworld https://github.com/fw876/helloworld.git^e8efa31ae45ddf217863dced9068730bf24dd37a
-src-git video https://github.com/coolsnowwolf/video^a1c0945bdd677b6c1da20724e555e97861445bce

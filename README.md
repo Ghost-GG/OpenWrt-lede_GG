@@ -26,15 +26,15 @@
 | 文件 | 用途 |
 | --- | --- |
 | `.config` | 从用户已完成选择的配置复制，云端执行 defconfig 后检查选择是否丢失 |
-| `source.version` | LEDE master 的固定提交，首次使用 `80122feac964889bc69b62420cedfefaaf701eb0` |
-| `feeds.conf.default` | 用户原始 feeds 配置，保留分支信息供更新时参考 |
-| `feeds.lock` | 当前实际使用的 feeds 提交，工作流以此文件拉取依赖 |
+| `feeds.conf.default` | 每次编译按此文件拉取各 feeds 分支的最新提交 |
 
-首次固定版本用于匹配生成 `.config` 时的源码环境。以后升级源码时同步更新 `source.version`、`feeds.lock` 和 `.config`，避免混用不兼容版本。
+每次编译拉取 LEDE `master` 最新提交。两个 PassWall feeds 跟随 `main`，LuCI 跟随 `openwrt-25.12`，其余未指定分支的 feeds 跟随各仓库默认分支。仓库中的 `.config` 保持原样，在构建目录内执行 `defconfig` 并检查所选配置是否变化。
+
+实际拉取的源码提交和 feeds 版本记录在日志产物的 `buildinfo/source.version` 和 `buildinfo/feeds.lock` 中，不再从仓库读取固定版本。跟随上游不代表所有软件都是作者发布的最新版本；上游变更可能导致配置检查或编译失败。
 
 ## 缓存与日志
 
-清理运行器中不需要的 Android、.NET、GHC 文件，保留 swap。下载目录和 ccache 在相同源码、feeds 和配置间复用，ccache 上限 3 GiB；首次编译没有缓存加速。
+清理运行器中不需要的 Android、.NET、GHC、CodeQL 文件和 Docker 镜像，保留 swap，并记录磁盘容量、inode 和目录占用。下载目录和 ccache 根据实际拉取的源码、feeds 提交及配置生成缓存键，仅在版本一致时复用；ccache 上限 3 GiB。上游版本变化后可能没有缓存加速。
 
 通过 make 命令参数 `CONFIG_CCACHE=y` 启用编译缓存，不改写用户 `.config`。不缓存整套工具链和 build_dir，避免复用不兼容的构建状态。
 

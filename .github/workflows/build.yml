@@ -51,18 +51,18 @@ jobs:
           swapon --show | tee artifacts/logs/swap.txt
           free -h
 
-      - name: 获取固定版本的源码及 feeds
+      - name: 获取最新源码及 feeds
         timeout-minutes: 30
         run: |
-          revision=$(tr -d '\r\n' < source.version)
-          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
-          git init openwrt
-          git -C openwrt remote add origin https://github.com/coolsnowwolf/lede.git
-          git -C openwrt fetch --depth 1 origin "$revision"
-          git -C openwrt checkout --detach FETCH_HEAD
-          cp feeds.lock openwrt/feeds.conf.default
+          git clone --depth 1 --branch master https://github.com/coolsnowwolf/lede.git openwrt
+          cp feeds.conf.default openwrt/feeds.conf.default
           cd openwrt
           ./scripts/feeds update -a
+          # 每次跟随上游更新，同时保存实际提交，方便定位版本相关问题。
+          mkdir -p ../artifacts/buildinfo
+          git rev-parse HEAD > ../artifacts/buildinfo/source.version
+          ./scripts/feeds list -s -f > ../artifacts/buildinfo/feeds.lock
+          cp feeds.conf.default ../artifacts/buildinfo/
           ./scripts/feeds install -a
 
       - name: 解析并核对编译配置
@@ -74,7 +74,6 @@ jobs:
           make -C openwrt defconfig 2>&1 | tee artifacts/logs/defconfig.log
           cp openwrt/.config artifacts/buildinfo/resolved.config
           python3 scripts/check-config.py .config openwrt/.config
-          cp source.version feeds.lock artifacts/buildinfo/
           cd openwrt
           ./scripts/diffconfig.sh > ../artifacts/buildinfo/diffconfig
           ./scripts/feeds list -s > ../artifacts/buildinfo/feeds.buildinfo
@@ -86,9 +85,9 @@ jobs:
           path: |
             openwrt/dl
             openwrt/.ccache
-          key: lede-x86-22-v1-${{ hashFiles('source.version', 'feeds.lock', '.config') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: lede-x86-22-v2-${{ hashFiles('artifacts/buildinfo/source.version', 'artifacts/buildinfo/feeds.lock', '.config') }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            lede-x86-22-v1-${{ hashFiles('source.version', 'feeds.lock', '.config') }}-
+            lede-x86-22-v2-${{ hashFiles('artifacts/buildinfo/source.version', 'artifacts/buildinfo/feeds.lock', '.config') }}-
 
       - name: 下载源码包
         timeout-minutes: 20
