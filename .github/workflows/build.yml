@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     timeout-minutes: 360
     env:
       TZ: Asia/Shanghai
@@ -26,15 +26,27 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: 清理磁盘并安装依赖
-        timeout-minutes: 25
+      - name: 记录清理前空间
         run: |
-          # 只清理 GitHub 临时运行器中与 LEDE 编译无关的预装组件。
           mkdir -p artifacts/logs
           df -hT / /mnt "$GITHUB_WORKSPACE" | tee artifacts/logs/disk-before.txt
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
-          # 本任务不使用容器镜像；保留 swap，避免将磁盘问题转化为内存不足。
-          sudo docker image prune --all --force
+
+      - name: 清理预装软件和 swap
+        # kenzok8 使用的清理仓库已迁移，固定提交以避免清理范围意外变化。
+        uses: zhang-brook/free-disk-space@20bfc7937f5519190924e19e80c2061d03743e01
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: 安装编译依赖
+        timeout-minutes: 25
+        run: |
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
@@ -46,16 +58,36 @@ jobs:
             python3 python3-pyelftools python3-setuptools qemu-utils rsync scons \
             squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip wget \
             xmlto xxd xz-utils zlib1g-dev
+          sudo apt-get autoremove --purge -y
           sudo apt-get clean
           df -hT / /mnt "$GITHUB_WORKSPACE" | tee artifacts/logs/disk-after-cleanup.txt
           swapon --show | tee artifacts/logs/swap.txt
           free -h
+          # ubuntu-latest 会升级系统，缓存必须区分实际发行版。
+          . /etc/os-release
+          echo "CACHE_OS=$ID-$VERSION_ID" >> "$GITHUB_ENV"
 
-      - name: 获取最新源码及 feeds
+      - name: 获取最新源码并分配构建目录
         timeout-minutes: 30
         run: |
           git clone --depth 1 --branch master https://github.com/coolsnowwolf/lede.git openwrt
           cp feeds.conf.default openwrt/feeds.conf.default
+          # 借鉴 kenzok8，将下载、产物及工具链目录放到 /mnt，避免全部挤占工作区磁盘。
+          sudo mkdir -p /mnt/openwrt/dl /mnt/openwrt/bin /mnt/openwrt/staging_dir
+          sudo chown -R "$(id -u):$(id -g)" /mnt/openwrt
+          ln -s /mnt/openwrt/dl openwrt/dl
+          ln -s /mnt/openwrt/bin openwrt/bin
+          ln -s /mnt/openwrt/staging_dir openwrt/staging_dir
+
+      - name: 更新 feeds
+        timeout-minutes: 30
+        run: |
+          cd openwrt
+          ./scripts/feeds update -a
+
+      - name: 再次更新并安装 feeds
+        timeout-minutes: 30
+        run: |
           cd openwrt
           ./scripts/feeds update -a
           # 每次跟随上游更新，同时保存实际提交，方便定位版本相关问题。
@@ -78,29 +110,29 @@ jobs:
           ./scripts/diffconfig.sh > ../artifacts/buildinfo/diffconfig
           ./scripts/feeds list -s > ../artifacts/buildinfo/feeds.buildinfo
 
-      - name: 恢复下载和编译缓存
-        id: cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: |
-            openwrt/dl
-            openwrt/.ccache
-          key: lede-x86-22-v2-${{ hashFiles('artifacts/buildinfo/source.version', 'artifacts/buildinfo/feeds.lock', '.config') }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: |
-            lede-x86-22-v2-${{ hashFiles('artifacts/buildinfo/source.version', 'artifacts/buildinfo/feeds.lock', '.config') }}-
-
       - name: 下载源码包
         timeout-minutes: 20
         run: |
           # 通过 make 参数启用主机编译缓存，不修改用户的固件配置。
-          make -C openwrt download -j8 CONFIG_CCACHE=y 2>&1 | tee artifacts/logs/download.log
+          make -C openwrt download -j"$(( $(nproc) + 1 ))" CONFIG_CCACHE=y 2>&1 | tee artifacts/logs/download.log
+          find /mnt/openwrt/dl -type f -size -1024c -print -delete
+
+      - name: 恢复工具链和编译缓存
+        uses: stupidloud/cachewrtbuild@b729f807837dbc3455d02fd35192660d9b662121
+        with:
+          ccache: 'true'
+          toolchain: 'true'
+          # 复用工具链文件，但仍由 Make 检查依赖，避免强制跳过必要的重新编译。
+          skip: 'false'
+          mixkey: lede-x86_64-${{ env.CACHE_OS }}-${{ hashFiles('.config') }}
+          prefix: ${{ github.workspace }}/openwrt
 
       - name: 检查编译前磁盘空间
         run: |
           # 同时记录容量、inode 和目录占用，便于判断是否需要利用独立的 /mnt 磁盘。
           df -hT / /mnt "$GITHUB_WORKSPACE" | tee artifacts/logs/disk-before-build.txt
           df -i / /mnt "$GITHUB_WORKSPACE" | tee artifacts/logs/inodes-before-build.txt
-          du -h --max-depth=1 openwrt | sort -h | tee artifacts/logs/directories-before-build.txt
+          du -h --max-depth=1 openwrt /mnt/openwrt | sort -h | tee artifacts/logs/directories-before-build.txt
 
       - name: 编译固件
         id: compile
@@ -120,17 +152,6 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
-
-      - name: 保存缓存供下次使用
-        if: ${{ !cancelled() && steps.configure.outcome == 'success' && steps.cache.outcome == 'success' }}
-        continue-on-error: true
-        timeout-minutes: 10
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: |
-            openwrt/dl
-            openwrt/.ccache
-          key: ${{ steps.cache.outputs.cache-primary-key }}
 
       - name: 整理诊断日志
         if: always()

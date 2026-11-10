@@ -34,9 +34,15 @@
 
 ## 缓存与日志
 
-清理运行器中不需要的 Android、.NET、GHC、CodeQL 文件和 Docker 镜像，保留 swap，并记录磁盘容量、inode 和目录占用。下载目录和 ccache 根据实际拉取的源码、feeds 提交及配置生成缓存键，仅在版本一致时复用；ccache 上限 3 GiB。上游版本变化后可能没有缓存加速。
+借鉴 kenzok8 的 Lean 工作流，使用 `ubuntu-latest`，清理 Android、.NET、GHC、大型预装软件、CodeQL 和 Docker 镜像，并按用户选择禁用 swap、删除 `/mnt/swapfile`。这会增加可用磁盘空间，也会降低内存不足时的缓冲能力。
 
-通过 make 命令参数 `CONFIG_CCACHE=y` 启用编译缓存，不改写用户 `.config`。不缓存整套工具链和 build_dir，避免复用不兼容的构建状态。
+将 `dl`、`bin`、`staging_dir` 放在 `/mnt/openwrt` 下，通过软链接连接源码目录；是否增加可用容量取决于运行器的实际挂载布局。记录 `/`、`/mnt` 和工作区的磁盘容量、inode，以及源码和 `/mnt/openwrt` 的目录占用。
+
+feeds 分两步更新后安装，保留用户原 feeds 来源，不套用他人的插件替换和 `.config`。下载并发为 CPU 核数加 1，随后清理小于 1 KiB 的下载文件；如误删有效小文件，编译时可能重新下载。
+
+下载完成后通过 `stupidloud/cachewrtbuild` 恢复工具链和 ccache，任务成功后由 Action 自动保存。缓存键包含实际 Ubuntu 版本、用户配置和 Action 计算的工具链提交；浅克隆下上游提交变化可能导致缓存未命中。保留 Make 依赖检查，不采用缓存命中后修改 Makefile 强制跳过工具链的做法。不再使用原下载目录缓存。
+
+通过 make 命令参数 `CONFIG_CCACHE=y` 启用编译缓存，ccache 上限 3 GiB，不改写用户 `.config`。第三方清理和缓存 Action 固定为已检查的提交。空间检查保留只读诊断，不复制依赖未定义 `MTARGET` 的构建目录删除代码。
 
 失败时优先下载 `LEDE-buildinfo-运行编号`，查看下载日志、编译日志、空间记录和 `resolved.config`。若配置项被 defconfig 丢弃，工作流会在正式编译前停止并列出变化。
 
