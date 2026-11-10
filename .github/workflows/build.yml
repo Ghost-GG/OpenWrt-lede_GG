@@ -30,8 +30,11 @@ jobs:
         timeout-minutes: 25
         run: |
           # 只清理 GitHub 临时运行器中与 LEDE 编译无关的预装组件。
-          df -h
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          mkdir -p artifacts/logs
+          df -hT / /mnt "$GITHUB_WORKSPACE" | tee artifacts/logs/disk-before.txt
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+          # 本任务不使用容器镜像；保留 swap，避免将磁盘问题转化为内存不足。
+          sudo docker image prune --all --force
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
@@ -44,7 +47,8 @@ jobs:
             squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip wget \
             xmlto xxd xz-utils zlib1g-dev
           sudo apt-get clean
-          df -h
+          df -hT / /mnt "$GITHUB_WORKSPACE" | tee artifacts/logs/disk-after-cleanup.txt
+          swapon --show | tee artifacts/logs/swap.txt
           free -h
 
       - name: 获取固定版本的源码及 feeds
@@ -92,6 +96,13 @@ jobs:
           # 通过 make 参数启用主机编译缓存，不修改用户的固件配置。
           make -C openwrt download -j8 CONFIG_CCACHE=y 2>&1 | tee artifacts/logs/download.log
 
+      - name: 检查编译前磁盘空间
+        run: |
+          # 同时记录容量、inode 和目录占用，便于判断是否需要利用独立的 /mnt 磁盘。
+          df -hT / /mnt "$GITHUB_WORKSPACE" | tee artifacts/logs/disk-before-build.txt
+          df -i / /mnt "$GITHUB_WORKSPACE" | tee artifacts/logs/inodes-before-build.txt
+          du -h --max-depth=1 openwrt | sort -h | tee artifacts/logs/directories-before-build.txt
+
       - name: 编译固件
         id: compile
         timeout-minutes: 300
@@ -126,7 +137,8 @@ jobs:
         if: always()
         run: |
           mkdir -p artifacts/logs
-          df -h > artifacts/logs/disk.txt
+          df -hT > artifacts/logs/disk.txt
+          df -i > artifacts/logs/inodes.txt
           free -h > artifacts/logs/memory.txt
           find artifacts/logs -type f -name '*.log' -exec gzip -f {} +
 
