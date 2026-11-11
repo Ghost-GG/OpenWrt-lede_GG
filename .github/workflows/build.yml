@@ -97,6 +97,17 @@ jobs:
           cp feeds.conf.default ../artifacts/buildinfo/
           ./scripts/feeds install -a
 
+      - name: 修复 libtirpc 主机编译兼容性
+        run: |
+          # libtirpc 1.3.3 使用旧式函数声明，C23 默认模式会将空参数列表解释为无参数。
+          # 仅主机端使用 GNU C17，保留目标固件编译参数与源码哈希校验。
+          makefile=openwrt/feeds/packages/libs/libtirpc/Makefile
+          grep -q '^HOST_CFLAGS[[:space:]]*+=' "$makefile"
+          sed -i '/^HOST_CFLAGS[[:space:]]*+=/s/$/ -std=gnu17/' "$makefile"
+          grep '^HOST_CFLAGS' "$makefile" | tee artifacts/buildinfo/libtirpc-host-flags.txt
+          git -C openwrt/feeds/packages diff -- libs/libtirpc/Makefile > artifacts/buildinfo/libtirpc-host.patch
+          gcc --version > artifacts/buildinfo/host-gcc.txt
+
       - name: 解析并核对编译配置
         id: configure
         run: |
