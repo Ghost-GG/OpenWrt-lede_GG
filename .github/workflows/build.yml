@@ -106,6 +106,9 @@ jobs:
           git rev-parse HEAD > ../artifacts/buildinfo/source.version
           ./scripts/feeds list -s -f > ../artifacts/buildinfo/feeds.lock
           cp feeds.conf.default ../artifacts/buildinfo/
+          bash ../scripts/restore-feed-packages.sh | tee ../artifacts/buildinfo/restored-packages.txt
+          # 补回目录后只重建索引，避免再次更新覆盖兼容补丁。
+          ./scripts/feeds update -i luci packages
           ./scripts/feeds install -a
 
       - name: 修复 libtirpc 主机编译兼容性

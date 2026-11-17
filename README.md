@@ -90,6 +90,8 @@ SSR Plus+ 自身的 Shadowsocks 客户端、服务端和 V2Ray/Xray 选择项为
 
 工作流将 `.config` 复制到构建目录，执行 `defconfig` 并核对所选配置，不回写仓库中的原文件。如果所选配置被丢弃，任务会在正式编译前停止并列出差异。
 
+2026 年 11 月 17 日，上游将 `luci-mod-network` 和 `hwdata` 从 feeds 移除，当前 LEDE 尚未提供替代包。工作流仅在对应目录缺失时，从删除前的提交补回这两个包，其余源码继续更新；补回版本记录在 `buildinfo/restored-packages.txt`，源码 SHA256 校验保持不变。
+
 实际使用的版本记录在日志产物的 `buildinfo/source.version` 和 `buildinfo/feeds.lock` 中。软件版本取决于 feeds 的维护进度，可能落后于软件作者发布的版本；上游更新也可能导致配置检查或编译失败。
 
 ## 构建环境与缓存
