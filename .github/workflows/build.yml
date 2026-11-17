@@ -82,6 +82,14 @@ jobs:
           ln -s /mnt/openwrt/bin openwrt/bin
           ln -s /mnt/openwrt/staging_dir openwrt/staging_dir
 
+      - name: 补充 erofs-utils 源码镜像
+        run: |
+          # Buildroot 镜像提供同一源码归档；保留上游地址和 PKG_HASH 校验。
+          makefile=openwrt/tools/erofs-utils/Makefile
+          grep -q '^PKG_SOURCE_URL[:?]*=' "$makefile"
+          sed -i 's|^PKG_SOURCE_URL[:?]*=|PKG_SOURCE_URL:=https://sources.buildroot.net/erofs-utils/ |' "$makefile"
+          grep -E '^PKG_(VERSION|SOURCE_URL|HASH)[:?]*=' "$makefile"
+
       - name: 更新 feeds
         timeout-minutes: 30
         run: |
